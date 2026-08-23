@@ -70,6 +70,10 @@ async def lifespan(app: FastAPI):
         db_pool.closeall()
 
 app = FastAPI(lifespan=lifespan)
+
+from prometheus_fastapi_instrumentator import Instrumentator
+Instrumentator().instrument(app).expose(app)
+
 HELD_CONNECTIONS = []
 
 @app.get("/health")

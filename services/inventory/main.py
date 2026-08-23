@@ -30,6 +30,9 @@ def log(level, message, **fields):
 
 app = FastAPI()
 
+from prometheus_fastapi_instrumentator import Instrumentator
+Instrumentator().instrument(app).expose(app)
+
 @app.get("/health")
 def health():
     return {"status": "ok", "service": SERVICE_NAME}
