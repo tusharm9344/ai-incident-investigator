@@ -12,6 +12,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
 
   payment:
     build: ./services/payment
@@ -27,19 +28,24 @@ services:
         condition: service_healthy
     ports:
       - "8001:8000"
+    restart: unless-stopped
 
   inventory:
     build: ./services/inventory
     ports:
       - "8002:8000"
+    restart: unless-stopped
 
   checkout:
     build: ./services/checkout
     depends_on:
-      - payment
-      - inventory
+      payment:
+        condition: service_healthy
+      inventory:
+        condition: service_healthy
     ports:
       - "8000:8000"
+    restart: unless-stopped
 
   loki:
     image: grafana/loki:2.9.0
@@ -48,6 +54,7 @@ services:
     volumes:
       - ./observability/loki-config.yml:/etc/loki/local-config.yaml
     command: -config.file=/etc/loki/local-config.yaml
+    restart: unless-stopped
 
   promtail:
     image: grafana/promtail:3.0.0
@@ -57,6 +64,7 @@ services:
     command: -config.file=/etc/promtail/config.yml
     depends_on:
       - loki
+    restart: unless-stopped
 
   prometheus:
     image: prom/prometheus:v2.53.0
@@ -66,6 +74,7 @@ services:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml
     command:
       - --config.file=/etc/prometheus/prometheus.yml
+    restart: unless-stopped
 
   grafana:
     image: grafana/grafana:11.1.0
@@ -78,3 +87,4 @@ services:
     depends_on:
       - loki
       - prometheus
+    restart: unless-stopped
