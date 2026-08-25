@@ -3,10 +3,8 @@ import logging
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-
 import httpx
 from fastapi import FastAPI, HTTPException
-
 from fingerprint import fingerprint_and_cluster
 from correlator import correlate_incident
 
