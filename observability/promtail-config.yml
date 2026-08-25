@@ -1,3 +1,4 @@
+#Find containers→read their logs→attach labels→send the logs to Loki.
 server:
   http_listen_port: 9080
 
@@ -10,8 +11,8 @@ clients:
 scrape_configs:
   - job_name: docker
     docker_sd_configs:
-      - host: unix:///var/run/docker.sock
+      - host: unix:///var/run/docker.sock #special file that programs use to communicate with another program on the same machine
         refresh_interval: 5s
-    relabel_configs:
+    relabel_configs: #renames source to target for loki to understand the logs better
       - source_labels: ['__meta_docker_container_name']
         target_label: container

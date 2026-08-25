@@ -3,7 +3,7 @@ auth_enabled: false
 server:
   http_listen_port: 3100
 
-common:
+common: #default settings used by loki's components (ingester, querier, distributor, etc.)
   path_prefix: /loki
   storage:
     filesystem:
@@ -17,8 +17,9 @@ common:
 schema_config:
   configs:
     - from: 2020-10-24
-      store: tsdb
-      object_store: filesystem
+      store: tsdb #(tsdb is the default storage engine 
+                  #for Loki, that uses index to store and find chunks)
+      object_store: filesystem. #store the data on the local machine's filesystem
       schema: v13
       index:
         prefix: index_

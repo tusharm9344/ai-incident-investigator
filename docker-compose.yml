@@ -88,3 +88,11 @@ services:
       - loki
       - prometheus
     restart: unless-stopped
+  incident-engine:
+    build: ./incident-engine
+    depends_on:
+      - loki
+    ports:
+      - "8003:8000"
+    restart: unless-stopped
+ 
