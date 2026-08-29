@@ -1,18 +1,17 @@
 import json
 import logging
-import os
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 
 import httpx
-from openai import OpenAI
 from fastapi import FastAPI, HTTPException
 
-from revenue import calculate_revenue_impact
+from fingerprint import fingerprint_and_cluster
+from correlator import correlate_incident
 
-SERVICE_NAME = "rca-engine"
-INCIDENT_ENGINE_URL = "http://incident-engine:8000"
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+SERVICE_NAME = "incident-engine"
+LOKI_URL = "http://loki:3100"
 
 class JsonFormatter(logging.Formatter):
     def format(self, record):
@@ -40,140 +39,79 @@ app = FastAPI()
 from prometheus_fastapi_instrumentator import Instrumentator
 Instrumentator().instrument(app).expose(app)
 
-from fastapi.middleware.cors import CORSMiddleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # demo only — restrict in real production
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-client = OpenAI(
-    api_key=GROQ_API_KEY,
-    base_url="https://api.groq.com/openai/v1",
-) if GROQ_API_KEY else None
-
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": SERVICE_NAME, "claude_configured": client is not None}
+    return {"status": "ok", "service": SERVICE_NAME}
 
 
-RCA_SYSTEM_PROMPT = """You are an incident investigator for a distributed payments system.
-
-You will be given a structured incident: error patterns, affected services,
-timing, and a pre-calculated revenue impact figure.
-
-Rules:
-- You must NOT invent, estimate, or recalculate any monetary figures. Use
-  the transaction_value_at_risk number exactly as given.
-- Your job is to explain the technical root cause using the evidence
-  provided, then connect it to the business impact figure.
-- Only use the error patterns and services given as evidence. Do not
-  invent services, error types, or root causes not present in the data.
-- Respond ONLY with valid JSON matching this exact schema, no other text:
-
-{
-  "root_cause": "one or two sentence technical explanation",
-  "confidence": 0.0,
-  "evidence": ["short evidence bullet", "short evidence bullet"],
-  "severity": "P1|P2|P3",
-  "impact": ["affected service or area", "..."],
-  "business_impact_summary": "one sentence connecting technical failure to transaction_value_at_risk",
-  "recommended_fix": "concise, bounded, explainable recommendation",
-  "alternative_hypotheses": ["other possible explanation", "..."]
-}
-"""
-
-
-def build_incident_context(incident: dict, revenue: dict) -> str:
+def fetch_logs_from_loki(minutes: int = 10) -> list[dict]:
     """
-    Compact structured context — NOT raw logs. This is what keeps token
-    cost low and RCA quality high/auditable.
+    Queries Loki for logs from checkout/payment/inventory in the last
+    `minutes`, and parses each log line (which is JSON, since our services
+    log structured JSON) into a plain dict.
     """
-    context = {
-        "incident_id": incident["incident_id"],
-        "incident_window": {
-            "start": incident["incident_start"],
-            "end": incident["incident_end"],
-        },
-        "affected_services": incident["affected_services"],
-        "total_error_count": incident["total_error_count"],
-        "unique_error_patterns": incident["unique_error_patterns"],
-        "likely_root_cluster": incident["likely_root_cluster"],
-        "error_patterns": incident["error_patterns"],
-        "revenue_impact": revenue,
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(minutes=minutes)
+
+    params = {
+        "query": '{container=~".*(checkout|payment|inventory).*"}',
+        "start": str(int(start.timestamp() * 1e9)),
+        "end": str(int(end.timestamp() * 1e9)),
+        "limit": "5000",
     }
-    return json.dumps(context, indent=2)
 
-
-@app.post("/investigate")
-def investigate(minutes: int = 10):
-    """
-    Full pipeline: fetch correlated incident -> calculate revenue impact
-    -> send compact context to Claude -> return structured RCA.
-    """
-    if client is None:
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured")
-
-    start = time.time()
-
-    # 1. Get the correlated incident from incident-engine
     try:
-        resp = httpx.post(f"{INCIDENT_ENGINE_URL}/analyze", params={"minutes": minutes}, timeout=15.0)
+        resp = httpx.get(f"{LOKI_URL}/loki/api/v1/query_range", params=params, timeout=10.0)
         resp.raise_for_status()
     except Exception as e:
-        log("error", "incident_engine_call_failed", error=str(e))
-        raise HTTPException(status_code=502, detail="incident_engine_unavailable")
+        log("error", "loki_fetch_failed", error=str(e))
+        raise HTTPException(status_code=502, detail="loki_unavailable")
 
-    incident_data = resp.json()
-    incident = incident_data.get("incident")
+    data = resp.json()
+    entries = []
 
-    if incident is None:
-        log("info", "no_incident_to_investigate")
-        return {"message": "No incident found in this window — nothing to investigate."}
+    for stream in data.get("data", {}).get("result", []):
+        for ts_ns, line in stream.get("values", []):
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                # Not a JSON log line (e.g. uvicorn access log) — skip it,
+                # the incident engine only cares about our structured logs.
+                continue
+            # Normalize timestamp to ISO string for easy sorting/display.
+            parsed["timestamp"] = datetime.fromtimestamp(
+                int(ts_ns) / 1e9, tz=timezone.utc
+            ).isoformat()
+            entries.append(parsed)
 
-    # 2. Calculate revenue impact (deterministic, NOT sent to Claude to compute)
-    revenue = calculate_revenue_impact(
-        incident_start=incident["incident_start"],
-        incident_end=incident["incident_end"],
-    )
-    log("info", "revenue_calculated", incident_id=incident["incident_id"],
-        value_at_risk=revenue["transaction_value_at_risk"])
+    return entries
 
-    # 3. Build compact context and call Claude
-    context_str = build_incident_context(incident, revenue)
 
-    try:
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            max_tokens=1000,
-            messages=[
-                {"role": "system", "content": RCA_SYSTEM_PROMPT},
-                {"role": "user", "content": context_str},
-            ],
-        )
-        raw_text = completion.choices[0].message.content.strip()
-        # Guard against accidental markdown code fences
-        if raw_text.startswith("```"):
-            raw_text = raw_text.strip("`")
-            if raw_text.startswith("json"):
-                raw_text = raw_text[4:]
-        rca_result = json.loads(raw_text)
-    except Exception as e:
-        log("error", "llm_call_failed", error=str(e))
-        raise HTTPException(status_code=502, detail=f"llm_investigation_failed: {e}")
+@app.post("/analyze")
+def analyze(minutes: int = 10):
+    """
+    Manual trigger: fetch recent logs, fingerprint them into patterns,
+    correlate patterns into a single structured incident.
+
+    This is the step-3 output that Revenue-at-Risk (step 4) and the RCA
+    engine (step 5) will both consume.
+    """
+    start = time.time()
+    logs = fetch_logs_from_loki(minutes=minutes)
+    log("info", "logs_fetched", count=len(logs), window_minutes=minutes)
+
+    clusters = fingerprint_and_cluster(logs)
+    log("info", "clusters_built", raw_log_count=len(logs), unique_patterns=len(clusters))
+
+    incident = correlate_incident(clusters)
 
     latency_ms = round((time.time() - start) * 1000, 2)
-    log("info", "rca_complete", incident_id=incident["incident_id"],
-        confidence=rca_result.get("confidence"), latency_ms=latency_ms)
 
-    return {
-        "incident_id": incident["incident_id"],
-        "incident_window": {
-            "start": incident["incident_start"],
-            "end": incident["incident_end"],
-        },
-        "affected_services": incident["affected_services"],
-        "revenue_impact": revenue,
-        "rca": rca_result,
-    }
+    if incident is None:
+        log("info", "no_incident_found", latency_ms=latency_ms)
+        return {"incident": None, "message": "No error-level patterns found in this window."}
+
+    log("info", "incident_correlated", incident_id=incident["incident_id"],
+        error_count=incident["total_error_count"], latency_ms=latency_ms)
+
+    return {"incident": incident}
