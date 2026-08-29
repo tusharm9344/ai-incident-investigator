@@ -133,6 +133,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+from prometheus_fastapi_instrumentator import Instrumentator
+Instrumentator().instrument(app).expose(app)
+
 HELD_CONNECTIONS = []  # used to simulate pool exhaustion (leaked/held connections)
 
 @app.get("/health")

@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AI Incident Investigator</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #0f1117;
+    color: #e6e6e6;
+    margin: 0;
+    padding: 40px 20px;
+  }
+  .container { max-width: 800px; margin: 0 auto; }
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .subtitle { color: #8a8f98; font-size: 14px; margin-bottom: 30px; }
+
+  button {
+    background: #4f7cff;
+    color: white;
+    border: none;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover { background: #3d68e6; }
+  button:disabled { background: #444; cursor: not-allowed; }
+
+  .card {
+    background: #171a21;
+    border: 1px solid #2a2e37;
+    border-radius: 12px;
+    padding: 24px;
+    margin-top: 24px;
+  }
+  .card h2 { margin-top: 0; font-size: 16px; color: #4f7cff; }
+
+  .severity {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .P1 { background: #4a1418; color: #ff6b6b; }
+  .P2 { background: #4a3a14; color: #ffb86b; }
+  .P3 { background: #143a1a; color: #6bff8f; }
+
+  .metric-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+    margin: 16px 0;
+  }
+  .metric {
+    background: #0f1117;
+    border-radius: 8px;
+    padding: 14px;
+    text-align: center;
+  }
+  .metric .value { font-size: 20px; font-weight: 700; }
+  .metric .label { font-size: 11px; color: #8a8f98; margin-top: 4px; }
+  .risk .value { color: #ff6b6b; }
+  .recovered .value { color: #6bff8f; }
+
+  ul { padding-left: 20px; margin: 8px 0; }
+  li { margin: 4px 0; color: #c5c9d1; font-size: 14px; }
+
+  .fix-box {
+    background: #0f1117;
+    border-left: 3px solid #4f7cff;
+    padding: 14px;
+    border-radius: 4px;
+    margin-top: 12px;
+    font-size: 14px;
+  }
+
+  .approve-btn { background: #2a9d4f; margin-top: 20px; }
+  .approve-btn:hover { background: #23833f; }
+
+  .loading { color: #8a8f98; font-size: 14px; margin-top: 16px; }
+  .error-box {
+    background: #4a1418;
+    border-radius: 8px;
+    padding: 16px;
+    margin-top: 20px;
+    color: #ff6b6b;
+    font-size: 14px;
+  }
+  .confidence-bar {
+    height: 6px;
+    background: #2a2e37;
+    border-radius: 3px;
+    margin-top: 8px;
+    overflow: hidden;
+  }
+  .confidence-fill { height: 100%; background: #4f7cff; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>AI Incident Investigator</h1>
+  <div class="subtitle">Root cause analysis for distributed payment failures</div>
+
+  <button id="investigateBtn" onclick="runInvestigation()">Run Investigation</button>
+  <div id="loading" class="loading" style="display:none;">Investigating last 10 minutes of activity...</div>
+  <div id="errorBox"></div>
+  <div id="result"></div>
+</div>
+
+<script>
+const RCA_ENGINE_URL = "http://localhost:8004";
+
+async function runInvestigation() {
+  const btn = document.getElementById("investigateBtn");
+  const loading = document.getElementById("loading");
+  const errorBox = document.getElementById("errorBox");
+  const result = document.getElementById("result");
+
+  btn.disabled = true;
+  loading.style.display = "block";
+  errorBox.innerHTML = "";
+  result.innerHTML = "";
+
+  try {
+    const resp = await fetch(`${RCA_ENGINE_URL}/investigate?minutes=10`, { method: "POST" });
+    const data = await resp.json();
+
+    if (!resp.ok) {
+      throw new Error(data.detail || "Investigation failed");
+    }
+
+    if (data.message) {
+      result.innerHTML = `<div class="card"><p>${data.message}</p></div>`;
+      return;
+    }
+
+    renderResult(data);
+  } catch (err) {
+    errorBox.innerHTML = `<div class="error-box">Error: ${err.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    loading.style.display = "none";
+  }
+}
+
+function renderResult(data) {
+  const rca = data.rca;
+  const rev = data.revenue_impact;
+  const confidencePct = Math.round((rca.confidence || 0) * 100);
+
+  document.getElementById("result").innerHTML = `
+    <div class="card">
+      <h2>Incident ${data.incident_id} <span class="severity ${rca.severity}">${rca.severity}</span></h2>
+      <p><strong>Root Cause:</strong> ${rca.root_cause}</p>
+      <div>Confidence: ${confidencePct}%
+        <div class="confidence-bar"><div class="confidence-fill" style="width:${confidencePct}%"></div></div>
+      </div>
+
+      <h3 style="margin-top:20px; font-size:14px; color:#8a8f98;">Evidence</h3>
+      <ul>${(rca.evidence || []).map(e => `<li>${e}</li>`).join("")}</ul>
+
+      <h3 style="font-size:14px; color:#8a8f98;">Affected Services</h3>
+      <p>${data.affected_services.join(", ")}</p>
+
+      <h3 style="font-size:14px; color:#8a8f98; margin-top:20px;">Business Impact</h3>
+      <div class="metric-row">
+        <div class="metric">
+          <div class="value">₹${rev.total_attempted_value.toLocaleString()}</div>
+          <div class="label">Total Attempted</div>
+        </div>
+        <div class="metric">
+          <div class="value">₹${rev.successful_transaction_value.toLocaleString()}</div>
+          <div class="label">Successful</div>
+        </div>
+        <div class="metric risk">
+          <div class="value">₹${rev.transaction_value_at_risk.toLocaleString()}</div>
+          <div class="label">Value at Risk</div>
+        </div>
+      </div>
+      <p style="font-size:13px; color:#8a8f98;">${rca.business_impact_summary || ""}</p>
+
+      <h3 style="font-size:14px; color:#8a8f98; margin-top:20px;">Recommended Fix</h3>
+      <div class="fix-box">${rca.recommended_fix}</div>
+
+      ${rca.alternative_hypotheses && rca.alternative_hypotheses.length ? `
+        <h3 style="font-size:14px; color:#8a8f98; margin-top:20px;">Alternative Hypotheses</h3>
+        <ul>${rca.alternative_hypotheses.map(h => `<li>${h}</li>`).join("")}</ul>
+      ` : ""}
+
+      <button class="approve-btn" onclick="approveAndCreateTicket('${data.incident_id}')">
+        Approve & Create Jira Ticket
+      </button>
+      <div id="jiraStatus"></div>
+    </div>
+  `;
+}
+
+async function approveAndCreateTicket(incidentId) {
+  document.getElementById("jiraStatus").innerHTML =
+    `<p style="margin-top:12px; color:#8a8f98;">Jira integration not wired yet — coming in Step 7.</p>`;
+}
+</script>
+</body>
+</html>

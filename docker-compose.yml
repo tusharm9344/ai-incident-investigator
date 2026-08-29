@@ -95,4 +95,18 @@ services:
     ports:
       - "8003:8000"
     restart: unless-stopped
- 
+  rca-engine:
+    build: ./rca-engine
+    environment:
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: incidentdb
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+    depends_on:
+      - incident-engine
+      - postgres
+    ports:
+      - "8004:8000"
+    restart: unless-stopped

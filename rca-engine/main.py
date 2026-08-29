@@ -5,14 +5,14 @@ import sys
 import time
 
 import httpx
-from openai import OpenAI
+from anthropic import Anthropic
 from fastapi import FastAPI, HTTPException
 
 from revenue import calculate_revenue_impact
 
 SERVICE_NAME = "rca-engine"
 INCIDENT_ENGINE_URL = "http://incident-engine:8000"
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
 class JsonFormatter(logging.Formatter):
     def format(self, record):
@@ -48,10 +48,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-client = OpenAI(
-    api_key=GROQ_API_KEY,
-    base_url="https://api.groq.com/openai/v1",
-) if GROQ_API_KEY else None
+client = Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
 @app.get("/health")
 def health():
@@ -113,7 +110,7 @@ def investigate(minutes: int = 10):
     -> send compact context to Claude -> return structured RCA.
     """
     if client is None:
-        raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured")
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured")
 
     start = time.time()
 
@@ -144,15 +141,13 @@ def investigate(minutes: int = 10):
     context_str = build_incident_context(incident, revenue)
 
     try:
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+        message = client.messages.create(
+            model="claude-sonnet-4-6",
             max_tokens=1000,
-            messages=[
-                {"role": "system", "content": RCA_SYSTEM_PROMPT},
-                {"role": "user", "content": context_str},
-            ],
+            system=RCA_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": context_str}],
         )
-        raw_text = completion.choices[0].message.content.strip()
+        raw_text = message.content[0].text.strip()
         # Guard against accidental markdown code fences
         if raw_text.startswith("```"):
             raw_text = raw_text.strip("`")
@@ -160,8 +155,8 @@ def investigate(minutes: int = 10):
                 raw_text = raw_text[4:]
         rca_result = json.loads(raw_text)
     except Exception as e:
-        log("error", "llm_call_failed", error=str(e))
-        raise HTTPException(status_code=502, detail=f"llm_investigation_failed: {e}")
+        log("error", "claude_call_failed", error=str(e))
+        raise HTTPException(status_code=502, detail=f"claude_investigation_failed: {e}")
 
     latency_ms = round((time.time() - start) * 1000, 2)
     log("info", "rca_complete", incident_id=incident["incident_id"],
