@@ -9,6 +9,7 @@ from openai import OpenAI
 from fastapi import FastAPI, HTTPException
 
 from revenue import calculate_revenue_impact
+from jira_client import create_jira_ticket, jira_configured
 
 SERVICE_NAME = "rca-engine"
 INCIDENT_ENGINE_URL = "http://incident-engine:8000"
@@ -140,12 +141,12 @@ def investigate(minutes: int = 10):
     log("info", "revenue_calculated", incident_id=incident["incident_id"],
         value_at_risk=revenue["transaction_value_at_risk"])
 
-    # 3. Build compact context and call the LLM
+    # 3. Build compact context and call Claude
     context_str = build_incident_context(incident, revenue)
 
     try:
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             max_tokens=1000,
             messages=[
                 {"role": "system", "content": RCA_SYSTEM_PROMPT},
@@ -177,3 +178,33 @@ def investigate(minutes: int = 10):
         "revenue_impact": revenue,
         "rca": rca_result,
     }
+
+
+@app.post("/approve")
+def approve(body: dict):
+    """
+    Human-approval step: called only when a person clicks "Approve & Create
+    Jira Ticket" on the dashboard, after reviewing the RCA. Does NOT re-run
+    the investigation — takes the already-produced incident_id, rca, and
+    revenue_impact exactly as shown to the human, and files a Jira ticket
+    from them. This is what prevents auto-ticket spam (per project spec).
+    """
+    if not jira_configured():
+        raise HTTPException(status_code=500, detail="jira_not_configured")
+
+    incident_id = body.get("incident_id")
+    rca = body.get("rca")
+    revenue = body.get("revenue_impact")
+    affected_services = body.get("affected_services", [])
+
+    if not (incident_id and rca and revenue):
+        raise HTTPException(status_code=400, detail="missing incident_id, rca, or revenue_impact")
+
+    try:
+        ticket = create_jira_ticket(incident_id, rca, revenue, affected_services)
+    except Exception as e:
+        log("error", "jira_ticket_failed", incident_id=incident_id, error=str(e))
+        raise HTTPException(status_code=502, detail=f"jira_ticket_failed: {e}")
+
+    log("info", "jira_ticket_created", incident_id=incident_id, issue_key=ticket["issue_key"])
+    return ticket

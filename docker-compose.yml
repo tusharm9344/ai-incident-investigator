@@ -99,6 +99,10 @@ services:
     build: ./rca-engine
     environment:
       GROQ_API_KEY: ${GROQ_API_KEY}
+      JIRA_BASE_URL: ${JIRA_BASE_URL}
+      JIRA_EMAIL: ${JIRA_EMAIL}
+      JIRA_API_TOKEN: ${JIRA_API_TOKEN}
+      JIRA_PROJECT_KEY: ${JIRA_PROJECT_KEY}
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: incidentdb

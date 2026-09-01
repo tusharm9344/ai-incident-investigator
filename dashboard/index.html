@@ -152,6 +152,10 @@ function renderResult(data) {
   const rev = data.revenue_impact;
   const confidencePct = Math.round((rca.confidence || 0) * 100);
 
+  // Stash the full result so approveAndCreateTicket can send exactly what
+  // the human reviewed — no re-running the investigation.
+  window.__lastResult = data;
+
   document.getElementById("result").innerHTML = `
     <div class="card">
       <h2>Incident ${data.incident_id} <span class="severity ${rca.severity}">${rca.severity}</span></h2>
@@ -200,8 +204,39 @@ function renderResult(data) {
 }
 
 async function approveAndCreateTicket(incidentId) {
-  document.getElementById("jiraStatus").innerHTML =
-    `<p style="margin-top:12px; color:#8a8f98;">Jira integration not wired yet — coming in Step 7.</p>`;
+  const statusEl = document.getElementById("jiraStatus");
+  const btn = event.target;
+  btn.disabled = true;
+  statusEl.innerHTML = `<p style="margin-top:12px; color:#8a8f98;">Creating Jira ticket...</p>`;
+
+  const data = window.__lastResult;
+
+  try {
+    const resp = await fetch(`${RCA_ENGINE_URL}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        incident_id: data.incident_id,
+        rca: data.rca,
+        revenue_impact: data.revenue_impact,
+        affected_services: data.affected_services,
+      }),
+    });
+    const result = await resp.json();
+
+    if (!resp.ok) {
+      throw new Error(result.detail || "Ticket creation failed");
+    }
+
+    statusEl.innerHTML = `
+      <p style="margin-top:12px; color:#6bff8f;">
+        ✓ Jira ticket created:
+        <a href="${result.url}" target="_blank" style="color:#4f7cff;">${result.issue_key}</a>
+      </p>`;
+  } catch (err) {
+    statusEl.innerHTML = `<p style="margin-top:12px; color:#ff6b6b;">Error: ${err.message}</p>`;
+    btn.disabled = false;
+  }
 }
 </script>
 </body>
