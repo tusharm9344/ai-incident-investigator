@@ -137,18 +137,18 @@ like a diary entry                        a live health readout
 ┌───────────────┐                        ┌───────────────┐
 │   PROMTAIL    │                        │  PROMETHEUS   │
 │ (log shipper) │                        │  port 9090    │
-└───────┬───────┘                        └───────┬───────┘
-        │ ships logs                              │ pulls metrics
-        ▼                                         │ every 5 sec
-┌───────────────┐                                 │
-│     LOKI       │◀────────────────────────────────┘
-│   port 3100     │        both feed into
+└───────┬───────┘                        └─────-─┬───────┘
+        │ ships logs                             │ pulls metrics
+        ▼                                        │ every 5 sec
+┌───────────────┐                                │
+│     LOKI      │◀───────────────────────────────┘
+│   port 3100   │        both feed into
 └───────┬───────┘
         │
         ▼
 ┌───────────────┐
-│   GRAFANA      │  ◀── one screen to see logs + metrics together
-│   port 3000     │
+│   GRAFANA     │  ◀── one screen to see logs + metrics together
+│   port 3000   │
 └───────────────┘
 ```
 
